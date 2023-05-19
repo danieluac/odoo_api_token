@@ -1,7 +1,7 @@
 import logging
 import functools
-from odoo.addons.api_token.controllers.utils.http_common import invalid_response
-from odoo.addons.api_token.controllers.utils.response_types import ACCESS_TOKEN_NOT_FOUND, ACCESS_TOKEN_INVALID
+from odoo.addons.odoo_api_token.controllers.utils.http_common import invalid_response
+from odoo.addons.odoo_api_token.controllers.utils.response_types import ACCESS_TOKEN_NOT_FOUND, ACCESS_TOKEN_INVALID
 from odoo.http import request
 
 _logger = logging.getLogger(__name__)
