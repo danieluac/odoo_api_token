@@ -10,7 +10,9 @@
     'version': '16.0.1',
     'license': 'LGPL-3',
     'depends': ['base'],
-
+    'external_dependencies': {
+        'python': ['pyjwt']
+    },
     # always loaded
     'data': [],
     # only loaded in demonstration mode

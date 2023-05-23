@@ -6,34 +6,41 @@ from odoo import http
 from odoo.addons.odoo_api_token.controllers.utils.http_common import invalid_response
 from odoo.exceptions import AccessDenied, AccessError
 from odoo.http import request
+from odoo.addons.odoo_api_token.controllers.utils.token_validate import validate_token
+
 
 _logger = logging.getLogger(__name__)
 
 class AuthAccessToken(http.Controller):
 
     def get_login_params(self, post):
-        params = ["db", "login", "password"]
+        params = {"db": None, "login": None, "password": None}
         params = {key: post.get(key) for key in params if post.get(key)}
 
         if not params.get("db"):
             params["db"] = request.db
-
+        
         if not all([params.get("db"), params.get("login"), params.get("password")]):
             headers = request.httprequest.headers
+            params = {"db": None, "login": None, "password": None}
             params = {key: headers.get(key) for key in params if headers.get(key)}
 
             if not params.get("db"):
                 params["db"] = request.db
-
+                
             if not all([params.get("db"), params.get("login"), params.get("password")]):
                 return invalid_response(
                     "missing error", "either of the following are missing [db, username,password]", 403,
                 )
-            
+
         return params
     
     def get_token_success_login(self, uid):
-        access_token = request.env["user.access.token"].find_or_create_token(user_id=uid, create=True)
+
+        _logger.info("Updating env with uid logged")
+        request.session.uid = uid
+        request.update_env(user=uid)
+        access_token, expire_date = request.env["user.access.token"].sudo().find_or_create_token(user_id=uid, create=True)
         # Successful response:
         return werkzeug.wrappers.Response(
             status=200,
@@ -41,12 +48,8 @@ class AuthAccessToken(http.Controller):
             headers=[("Cache-Control", "no-store"), ("Pragma", "no-cache")],
             response=json.dumps(
                 {
-                    "uid": uid,
-                    "user_context": request.env.user.context_get() if uid else {},
                     "access_token": access_token,
-                    "company_name": request.env.user.company_id.name,
-                    "country": request.env.user.country_id.name,
-                    "contact_address": request.env.user.contact_address,
+                    "expire_date": expire_date
                 }
             ),
         )
@@ -54,6 +57,8 @@ class AuthAccessToken(http.Controller):
     @http.route("/api/v1/login-hr", methods=["POST"], type="http", auth="none", csrf=False)
     def auth_hr_login(self, **post):
         params = self.get_login_params(post)
+        if isinstance(params, werkzeug.wrappers.Response):
+            return params
 
         hr_uid = request.env["hr.employee"].sudo().search([
             ("work_email", "=", params.get("login")),
@@ -77,13 +82,15 @@ class AuthAccessToken(http.Controller):
         """
         The token URL to be used for getting the access_token:
         """
-
         params = self.get_login_params(post)
 
+        if isinstance(params, werkzeug.wrappers.Response):
+            return params
+
         db, username, password = (
-            params.get("db"),
-            post.get("login"),
-            post.get("password"),
+            params.get("db") if "db" in params else None,
+            params.get("login") if "login" in params else None,
+            params.get("password") if "password" in params else None,
         )
 
         try:
@@ -109,48 +116,41 @@ class AuthAccessToken(http.Controller):
 
         return self.get_token_success_login(uid)
 
-    @http.route("/api/login/token_api_key", methods=["GET"], type="http", auth="none", csrf=False)
-    def api_login_api_key(self, **post):
-        # The request post body is empty the credetials maybe passed via the headers.
-        headers = request.httprequest.headers
-        db = headers.get("db")
-        api_key = headers.get("api_key")
-        _credentials_includes_in_headers = all([db, api_key])
-        if not _credentials_includes_in_headers:
-            # Empty 'db' or 'username' or 'api_key:
-            return invalid_response(
-                "missing error", "either of the following are missing [db ,api_key]", 403,
-            )
-        # Login in odoo database:
-        user_id = request.env["res.users.apikeys"]._check_credentials(scope="rpc", key=api_key)
-        # request.session.authenticate(db, username, api_key)
-        if not user_id:
+    @http.route("/api/v1/api-key/login", methods=["POST"], type="http", auth="none", csrf=False)
+    def auth_api_token(self, **post):
+        params = self.get_login_params(post)
+
+        if isinstance(params, werkzeug.wrappers.Response):
+            return params
+        elif not params or ("password" not in params):
+            return invalid_response("missing error",
+                                    "either of the following are missing [username,password]", 403)
+
+        _logger.info("Checking Api Key for login %s" % params.get("login"))
+        uid = request.env["res.users.apikeys"].sudo()._check_credentials(scope="rpc", key=params.get("password"))
+
+        if not uid:
             info = "authentication failed"
             error = "authentication failed"
             _logger.error(info)
             return invalid_response(401, error, info)
 
-        uid = user_id
-        user_obj = request.env['res.users'].sudo().browse(int(uid))
+        return self.get_token_success_login(uid)
 
-        # Generate tokens
-        access_token = request.env["api.access_token"].find_or_create_token(user_id=uid, create=True)
-        # Successful response:
+    @validate_token
+    @http.route("/api/v1/logout", methods=["POST", "GET"], type="http", auth="none", csrf=False)
+    def auth_logout(self):
+        access_token = request.env["user.access.token"].sudo().search([("user_id", "=", request.env.user.id)])
+        if access_token:
+            access_token.invalidate_token()
+        
         return werkzeug.wrappers.Response(
             status=200,
             content_type="application/json; charset=utf-8",
             headers=[("Cache-Control", "no-store"), ("Pragma", "no-cache")],
             response=json.dumps(
                 {
-                    "uid": uid,
-                    # "user_context": request.session.get_context() if uid else {},
-                    "company_id": user_obj.company_id.id if uid else None,
-                    "company_ids": user_obj.company_ids.ids if uid else None,
-                    "partner_id": user_obj.partner_id.id,
-                    "access_token": access_token,
-                    "company_name": user_obj.company_id.name,
-                    "country": user_obj.country_id.name,
-                    "contact_address": user_obj.contact_address,
+                    "message": " user logged out"
                 }
             ),
         )

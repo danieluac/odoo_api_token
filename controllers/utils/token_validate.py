@@ -17,11 +17,16 @@ def validate_token(func):
         else:
             return invalid_response(ACCESS_TOKEN_NOT_FOUND[0], "missing access token in request header/parametter", ACCESS_TOKEN_NOT_FOUND[1])
         
-        access_token_data = request.env["user.access.token"].sudo().search([("token", "=", access_token)],
+        access_token_data = request.env["user.access.token"].sudo().search([("token", "=", access_token), ("is_expired", "=", False)],
                                                                           order="id DESC", limit=1)
-
-        if access_token_data.find_or_create_token(user_id=access_token_data.user_id.id) != access_token:
-            return invalid_response(ACCESS_TOKEN_INVALID[0], "token seems to have expired or invalid", ACCESS_TOKEN_INVALID[1])
+        
+        if access_token_data:
+            current_token = access_token_data.find_or_create_token(user_id=access_token_data.user_id.id)
+            
+            if current_token and current_token[0] != access_token:
+                return invalid_response(ACCESS_TOKEN_INVALID[0], "token seems to have expired or invalid", ACCESS_TOKEN_INVALID[1])
+        else:
+            return invalid_response(ACCESS_TOKEN_NOT_FOUND[0], "User not logged", ACCESS_TOKEN_NOT_FOUND[1])
 
         request.session.uid = access_token_data.user_id.id
         request.update_env(user=access_token_data.user_id.id)
